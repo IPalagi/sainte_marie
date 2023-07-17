@@ -1,0 +1,987 @@
+---
+title: "Caractérisation de la sécheresse sur la station de la Sainte-Marie à Glaignes
+  (à mettre en relation avec les indicateurs macro-invertébrés)"
+author: "Imane PALAGI"
+date: "2023-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+```
+
+Ce document présente la première partie de l'étude de l'influence de la sécheresse hydrologique sur les macro-invertébrés de la station SANDRE de la Rivière Sainte-Marie à Glaignes (département de l'Oise, région Hauts-de-France). Celle-ci à pour but d'identifier et de caractériser la sécheresse hydrologique sur la station grâce à des données environmentales issues de trois stations : une stations hydrométrique de la DREAL, une station de thermie des cours d'eau du reseau RNT de l'OFB et une station de qualité chimique de l'eau de l'Agence de l'eau. Ces stations sont situées à proximité des stations de pêches/relevés macro-invertébrés et ont été choisies selon des critères consultables dans le fichier Excel "codes RNT, aspe, hydro, quali, stations proches" sur le réseau OFB. Ces sécheresse hydrologique seront mises en relation avec des inidcateurs macro-invertébrés. 
+
+Cette première partie introduit une analyse détaillée à la station de l'influence de la sécheresse qui suit une analyse des grandes tendances régionales de la sécheresse, température et de l'évolution des communautés de poissons et macro-invertébrés.
+
+```{r}
+# Chargement des packages necessaires
+
+library(tidyverse) 
+library(hubeau) #package pour les données de débits 
+library(ggpubr) # package pour la réalisation de certains graphiques 
+library(hydroTSM) #package traitement/analyse de séries temporelles liées à l'hydrologie 
+library(runner) # pour le calcule de moyennes glissantes 
+library(lfstat) #pour l'identification/regroupement d'évènements de sécheresse 
+library(Hmisc) #pour le calculde de matrices de corrélation avec p-values 
+library(corrplot) #pour la visualisation de matrices de corrélations 
+
+```
+
+```{r}
+#création d'une palette de couleurs contrastées pour les graphiques 
+
+palette<-c('#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe', '#008080', '#e6beff', '#9a6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#808080', '#ffffff', '#000000')
+
+```
+
+Le seuil de sécheresse pour la station a été déterminé dans le Rmarkdown "Param_environnement_st_marie" (caractérisation de la sécheresse hydrologique pour les indicateurs poissons). Ce seuil est de 412 l/s (correspondant au Q95 de la courbe de débits classés en fonction de leur fréquence au dépassement). 
+
+```{r}
+#création d'un objet seuil 
+
+seuil<-412
+```
+
+# Définition des plages temporelles d'étude
+
+Il s'agit ici d'identifier et numéroter les périodes prélèvements (macro-invertébrés) à prélèvement qui permettront de mettre en relation les sécheresses et les résultats des prélèvements associées à ces périodes (pour plus d'explication, voir Rmarkdown du projet Esches_Bornel). 
+
+```{r}
+# importation du data frame contenant les i2m2 et les dates des opérations de pêche 
+
+load(file="raw_data/I2M2.Rda")
+```
+
+```{r}
+#Extraction des données d'i2m2 et ses métriques relatives à la Sainte-Marie 
+
+i2m2_stmarie<-Tableau_i2m2_metriques %>% 
+  filter(CODE_STATION=="03134730") %>%    #filtre sur le code station
+  mutate(DATE=ymd(DATE))
+
+i2m2_stmarie$CODE_PAR<-as.factor(i2m2_stmarie$CODE_PAR)
+i2m2_stmarie$LIB_PAR<-as.factor(i2m2_stmarie$LIB_PAR)
+
+```
+
+
+Les dates de prélèvements de la station de la Sainte-marie sont :
+
+```{r}
+# affichage de la colonne de dates dans l'ordre croissant 
+
+unique(sort(i2m2_stmarie$DATE, decreasing = FALSE))
+```
+
+```{r, eval=FALSE}
+save(i2m2_stmarie, file="raw_data/i2m2_stmarie.RData")
+```
+
+Pour définir la première plage d'étude pour la pêche du 2010-06-03 (ymd) (pas de prélèvement précédent), la date de début de la plage sera définir comme la date précédant le prélèvement de un an, soit le 2009-06-03.
+
+Les plages de travail, numérotées de 1 à 11, seront donc :
+
+Plage 1 : 2009-06-03 à 2010-06-03
+
+Plage 2 : 2010-06-04 à 2011-07-25
+
+Plage 3 : 2011-07-26 à 2012-05-29
+
+Plage 4 : 2012-05-30 à 2013-08-28
+
+Plage 5 : 2013-08-29 à 2014-07-22
+
+Plage 6 : 2014-07-23 à 2015-10-05
+
+Plage 7 : 2015-10-06 à 2016-08-06
+
+Plage 8 : 2016-08-07 à 2018-07-17
+
+Plage 9 : 2018-07-18 à 2019-06-13
+
+Plage 10 : 2019-06-14 à 2020-09-23
+
+Plage 11 : 2020-09-24 à 2021-08-18
+
+Les i2m2 et leurs métriques se verront également attribuer un numéro de 1 à 11 correspondant à la plage de sécheresse avec laquelle il seront mis en relation.
+
+```{r}
+# Chargement des données de débits journaliers (en l/s) issues de l'API Hydromérie de Hub'eau 
+
+q_journaliers <- get_hydrometrie_obs_elab(
+  list(code_entite = "H7513610",          # code de la station  
+       date_debut_obs_elab = "1992-01-01", #date de début de la chronique à importer
+       date_fin_obs_elab="2022-12-31",      # date de fin de la chronique à importer 
+       grandeur_hydro_elab = "QmJ")) %>%   # importation des débits journaliers 
+  select(code_station:resultat_obs_elab) %>%  # selection des colonnes utiles 
+  mutate(annee = lubridate::ymd(date_obs_elab), 
+         annee = lubridate::year(annee)) # création d'une colonne qui contient uniquement l'année 
+
+q_journaliers$date_obs_elab<-lubridate::ymd(q_journaliers$date_obs_elab) #conversion de la colonne de date en format date
+
+```
+
+```{r}
+# création d'une colonne avec la page de date pour chaque jour du data frame de débits journaliers 
+
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2009-06-03") & q_journaliers$date_obs_elab <=as.Date("2010-06-03") ,"plage_minv"] <- "1"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2010-06-04") & q_journaliers$date_obs_elab <=as.Date("2011-07-25") ,"plage_minv"] <- "2"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2011-07-26") & q_journaliers$date_obs_elab <=as.Date("2012-05-29") ,"plage_minv"] <- "3"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2012-05-30") & q_journaliers$date_obs_elab <=as.Date("2013-08-28") ,"plage_minv"] <- "4"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2013-08-29") & q_journaliers$date_obs_elab <=as.Date("2014-07-22") ,"plage_minv"] <- "5"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2014-07-23") & q_journaliers$date_obs_elab <=as.Date("2015-10-05") ,"plage_minv"] <- "6"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2015-10-06") & q_journaliers$date_obs_elab <=as.Date("2016-08-06") ,"plage_minv"] <- "7"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2016-08-07") & q_journaliers$date_obs_elab <=as.Date("2018-07-17") ,"plage_minv"] <- "8"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2018-07-18") & q_journaliers$date_obs_elab <=as.Date("2019-06-13") ,"plage_minv"] <- "9"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2019-06-14") & q_journaliers$date_obs_elab <=as.Date("2020-09-23") ,"plage_minv"] <- "10"
+q_journaliers[q_journaliers$date_obs_elab >=as.Date("2020-09-24") & q_journaliers$date_obs_elab <=as.Date("2021-08-18") ,"plage_minv"] <- "11"
+
+q_journaliers$plage_minv<-as.factor(q_journaliers$plage_minv)
+ 
+q_journaliers$plage_minv<-ordered(q_journaliers$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+```
+
+# Identification des plages de sécheresse
+
+L'identification des jours de sécheresse se fait sur le même modèle que pour les années calendaires de l'étude régionale, en comptant le nombre de jours où le débit est en dessous du seuil de sécheresse.
+
+```{r}
+# création du data frame du nombre de jours de sécheresse par plage 
+
+minv_plage_sech<-q_journaliers %>% 
+  drop_na() %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(jr_sech=sum(resultat_obs_elab<seuil))
+```
+
+```{r}
+#histogramme du nombre de jours de sécheresse par plage 
+
+minv_plage_sech %>% 
+  ggplot(aes(x=plage_minv, y=jr_sech, fill=plage_minv))+
+  geom_col()+
+  geom_text(aes(label=jr_sech), colour="black")+
+  scale_fill_manual(values=palette)+
+  xlab("Plage")+
+  ylab("Nombre de jours en dessous du seuil de sécheresse")
+
+
+
+```
+
+# Caractérisation des évènements de sécheresse
+
+Cette partie a pour but de caractériser, pour chaque plage, la durée, la sévérité, l'intensité et la fréquence des évènements de sécheresse ainsi que la saison à laquelle ils se sont produits.
+
+La première étape est d'identifier au sein des plages les différents évènements de sécheresse qui se sont produits.
+
+```{r}
+#représentation graphique par plage du débit journalier et du seuil de sécheresse 
+
+q_journaliers %>% 
+  drop_na() %>% 
+ggplot()+
+geom_line(aes(x=date_obs_elab, y=resultat_obs_elab),col="blue")+ # ajout de la courbe des débits en bleu 
+geom_line(aes(x=date_obs_elab, y=seuil), col="red")+  # ajout de la droite de seuil en rouge
+  ylab("Débits (en l/s)")+
+  xlab("Date")+
+  scale_x_date(date_breaks = "1 month")+  # définition du pas de l'abscisse à 1 mois 
+   theme(axis.text.x = element_text(angle = 90))+ # labels de l'axe x positionnés verticalement 
+  theme(axis.text = element_text(size = 6))+
+  facet_wrap(~plage_minv, scale="free")
+
+```
+
+On observe sur le graphique ci-dessus le soucis des sécheresses définies à partir des données journalières : les sécheresses inter-dépendantes et les micro-sécheresses (comme expliqué dans Tallaksen et. al, 1997). Certains évènements de sécheresse définis par la méthode des seuils peuvent être entrecoupés par des jours où le débit est au dessus du seuil, créant des évènements de sécheresse très rapprochés et inter-dépendants. De plus, le débt peut passer en dessous du seuil sur une très courte période avec un volume de déficit faible (micro_sécheresse), ce qui ne constitue pas le type de sécheresse les plus intéressantes pour cette étude. 
+
+Tallaksen et al. ont développés différents critères qui permettent de fusionner en une seule sécheresse des évènements de sécheresse très répprochés. En se basant sur cette étude, il a été décidé de considérer comme faisant partie d'une même sécheresse les évènements de sécheresse qui réponde aux deux critères suivants :
+
+-la durée en jours séparant les deux évènements de sécheresse est inférieure à 10 jours\
+-le rapport du volume exédentaire séparant les deux évènement sur le volume de défict du premier évènement est inférieur à 0,1
+
+Les caractéristiques de la sécheresse indépendante sont par conséquent les suivantes, selon Tallaksen et. al :
+
+-sa durée est égale au nombre de jours séparant le début du premier évènement et la fin du deuxième (durée du premier + durée séparant les evènements + durée du deuxième)\
+-son volume de déficit est égal à la somme du volume de déficit des deux évènements moins le volume exédentaire qui les sépare
+
+## Regroupement des sécheresses inter-dépendantes 
+
+```{r}
+#identification des jours de sécheresse 
+
+#préparation du data frame à entrer dans la fonction find_drought 
+
+minv_q_lfstat<-q_journaliers %>%  
+  drop_na() %>%    # pas de NA gardés => période des plages 1 à 8 selectionnée 
+  select(date_obs_elab, resultat_obs_elab) %>%   # uniquement les colonnes de dates et de débits conservées 
+  arrange()  # ordonnement dans l'ordre de dates croissantes 
+
+minv_q_lfstat<-as.xts(minv_q_lfstat)  #conversion du data frame en format xts pour pouvoir être utilisé par les fonctions de lfstat
+
+#utilisation de la fonction find_drought
+
+minv_drought_lfstat<-find_droughts(minv_q_lfstat, threshold = seuil, varying="constant", interval="day")
+
+head(minv_drought_lfstat, 10)
+```
+
+Dans l'extrait de tableau (format xts) ci-dessus, les jours de sécheresse sont identifiés par leur numéro d'apparition dans la chronique (1 dans l'exemple ci-dessus) dans la colonne event.no et les jours au dessus du seuil par le numéro 0. La colonne def.increas correspond au volume de déficit pour le jour considéré (positif = déficit, négatif= excédent).
+
+Il est maintenant possible de regrouper ces évènements de sécheresse selon les critères décrit par Tallaksen et. al, 1997 :
+
+```{r}
+minv_drought_lfstat<-pool_ic(minv_drought_lfstat, tmin=10, ratio=0.1) # rassemblement des évènement sur le critère durée inter-évènement <10 jours et le ratio exédent inter-évènement/ déficit de l'évènement de sécheresse précédent <0,1 
+
+head(minv_drought_lfstat, 10)
+```
+
+La colonne event.no donne les numéro d'apparition (numéro d'évènement) des évènements de sécheresse regroupés selon les critères temporels et volumiques. La colonne event.orig donne les numéros d'apparition des évènements de sécheresse avant regroupement.
+
+## Suppression des micro-sécheresses
+
+La page Git Hub de Anne VAN LOON, hydrologue, propose des scripts et des fonctions toutes faites pour le calcul de seuils, le rassemblement d'évènement de sécheresse inter-dépendants, supprimer les micro-sécheresses, calculer les caractéristiques des sécheresses et en faire des graphiques.
+
+Lien vers le projet Drought de la page Git Hub de Anne VAN LOON : <https://github.com/AnneVanLoon/drought/tree/master>
+
+Comme les évènements de sécheresse ont déjà été identifiés et rassemblés, les scripts de VAN LOON ne seront pas utilisés pour le faire mais ils sont très intéressants à utiliser si la caractérisation d'une sécheresse selon la méthode des seuils était à refaire.
+
+Les fonctions et les scripts de VAN LOON sont tous disponibles dans le dossier "Scripts Van Loon" du projet R "sainte-marie".
+
+```{r}
+#Fonction de VAN LOON pour la supression des micro-sécheresse sur un critère de durée 
+
+Minor <- function(file, dur, MIN){
+  droughts.sub <- subset(file, dur > MIN) 
+  row.names(droughts.sub) <- 1:nrow(droughts.sub)
+  return(droughts.sub)
+}
+
+```
+
+Remarque : dans la fonction Minor pour supprimer les évènements de micro-sécheresse sur un critère de durée, il faut changer 15 (deuxième ligne) par MIN, sinon la durée de selection ne change jamais.
+
+```{r}
+# suppression des micro-sécheresse sur un critère de temps : les micro-sécheresse de moins de 5 jours 
+
+minv_drought_lfstat<-as.data.frame(minv_drought_lfstat) #conversion de xts au format data frame 
+
+minv_drought_lfstat<-minv_drought_lfstat %>% 
+  mutate(date_obs_elab=as.Date(rownames(minv_drought_lfstat))) # re-création d'une colonne de dates 
+
+minv_lfstat_dur<-minv_drought_lfstat %>% 
+  dplyr::group_by(event.no) %>% 
+  dplyr::summarise(dur=n())     # calcul de la durée de chaque évènement de sécheresse 
+
+minv_lfstat_dur<-Minor(minv_lfstat_dur,minv_lfstat_dur$dur,5) # selection des évènements de moins de 5 jours 
+```
+
+Les évènements de sécheresse conservés après suppression des micro-sécheresse de moins de 5 jours sont :
+
+```{r}
+minv_lfstat_dur<-minv_lfstat_dur %>% 
+  filter(event.no!="0")
+
+minv_lfstat_dur
+```
+
+
+```{r}
+# création d'un data frame des évènements de sécheresse à étudier, avec les dates, la plage, le débit, le nouveau numéro d'évènement 
+
+minv_drought_final<-merge(minv_drought_lfstat, q_journaliers, by="date_obs_elab") #jointure par les dates du data frame final des évènements de sécheresse regroupés et du data frame de débits journaliers avec la colonne de plage 
+
+minv_drought_final<-minv_drought_final %>%  
+  select(date_obs_elab, annee, plage_minv, resultat_obs_elab, deficit= def.increase, event= event.no) %>% 
+  filter(event %in% c(minv_lfstat_dur$event.no)) # selection des évènement de sécheresse finaux, après regroupement et supression des micro-sécheresses 
+
+
+Event<-minv_drought_final$event
+
+i <- which(Event ==5)
+Event[i] <- 1 
+
+i <- which(Event ==8)
+Event[i] <- 2
+
+i <- which(Event ==12)
+Event[i] <- 3
+
+i <- which(Event ==14)
+Event[i] <- 4
+
+i <- which(Event ==16)
+Event[i] <- 5
+
+i <- which(Event ==23)
+Event[i] <- 6
+
+i <- which(Event ==33)
+Event[i] <- 7
+
+i <- which(Event ==37)
+Event[i] <- 8
+
+i <- which(Event ==39)
+Event[i] <- 9
+
+i <- which(Event ==48)
+Event[i] <- 10
+
+i <- which(Event ==54)
+Event[i] <- 11
+
+
+minv_drought_final<-minv_drought_final %>% 
+  mutate(event=Event)
+
+minv_drought_final$event<-as.factor(minv_drought_final$event)
+minv_drought_final$annee<-as.factor(minv_drought_final$annee)
+
+```
+
+```{r, eval=FALSE}
+#sauvegarde du data frame des évènements de sécheresse étudiés finaux 
+
+save(minv_drought_final, file="processed_data/minv_drought_final_events.RData")
+```
+
+Au total, 11 évènements de sécheresse ont été constitués après regroupement selon des critères temporels et volumiques. Ils se situent sur les plages 1,2,6, 8 et 10. Au total, 5 plages présentent des évènements de sécheresse et 6 plages n'en présentent aucun. Aucun évènement n'est à cheval sur deux plages. 
+
+## Durée des évènements de sécheresse
+
+Pour chaque évènement de sécheresse identifié, la durée de sécheresse est définie comme le nombre de jour entre le premier et le dernier jour de l'évènement, quelque soit le nombre de jours au dessus du seuil qu'il contient.
+
+```{r}
+# calcul de la durée de chaque évènement de sécheresse 
+
+minv_event_duration<-minv_drought_final %>% 
+  dplyr::group_by(plage_minv,event) %>% 
+  dplyr::summarise(duration=as.integer(difftime(max(date_obs_elab),min(date_obs_elab)), units = "day")+1) # calcul de la durée entre le premier et le dernier jour de chaque group, +1 car ça n'inclus pas le dernier jour 
+
+minv_event_duration$event<-ordered(as.factor(minv_event_duration$event), levels=c("1", "2", "3", "4", "5", "6","7", "8", "9", "10", "11", "12", "13", "14", "15", "16"))
+
+
+```
+
+```{r}
+# représentation graphique de la durée de chaque sécheresse 
+
+minv_event_duration %>% 
+  ggplot(aes(x=event, y=duration, fill=plage_minv))+
+  geom_col()+  
+  geom_text(aes(label=duration),position = position_stack(0.5), color="black")+
+  ylab("Durée (en jours)")+
+  xlab("Evènement")+
+  scale_fill_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                                "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                                "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c', "10"='#fabebe', "11"='#008080'))
+  
+```
+
+
+```{r}
+# calcul de la durée de sécheresse moyenne par plage 
+
+minv_plage_duration<-minv_event_duration %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(mean_duration=mean(duration))
+
+df<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),mean_duration=as.numeric(c(0,0,0,0,0,0)))
+
+minv_plage_duration<-rbind(minv_plage_duration, df)
+
+minv_plage_duration$plage_minv<-ordered(minv_plage_duration$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+```
+
+On peut rajouter à cette durée moyenne la somme de la durée des évènements de sécheresse.
+
+```{r}
+df<-minv_event_duration %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(sum_duration=sum(duration))
+
+df2<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),sum_duration=as.numeric(c(0,0,0,0,0,0)))
+
+df<-rbind(df,df2)
+
+minv_plage_duration<-merge(minv_plage_duration, df, by="plage_minv")
+
+minv_plage_duration<-minv_plage_duration %>% 
+  arrange(plage_minv)
+```
+
+```{r}
+#affichage du data frame plage_dr_duration 
+
+minv_plage_duration
+```
+
+## Sévérité des évènements de sécheresse
+
+Il s'agit ici de calculer le volume de déficite pour chaque évènement de sécheresse. Celui sera égal à la somme de la différence entre le débit seuil et le débit réel pour chaque jour de l'évènement. Si l'évènement est entrecoupés par des jours au dessus du seuil, le volume de déficit sera par conséquent égal à la somme des volumes de déficit des sous-évènemets moins les volumes exédentaires, comme indiqué dans Tallaksen et. al, 1997.
+
+```{r}
+# calcul de la sévérité (déficite) de chaque évènement par plage (évènement coupé si sur deux plages)
+
+minv_event_deficit<-minv_drought_final %>% 
+  dplyr::group_by(plage_minv, event) %>% 
+  dplyr::summarise(deficit=sum(deficit))
+
+```
+
+```{r}
+# représentation graphique de la sévérité par évènement 
+
+minv_event_deficit %>% 
+  ggplot(aes(x=event, y=deficit, fill=plage_minv))+
+  geom_col()+  
+  geom_text(aes(label=deficit),position = position_stack(0.5), color="black", size=3)+
+  ylab("Sévérité (en l/s)")+
+  xlab("Evènement")+
+  scale_fill_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                                "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                                "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c', "10"='#fabebe', "11"='#008080'))
+```
+
+On peut calculer la moyenne de la sévérité pour chaque plage, qui servira ensuite pour l'étude de l'effet de la sécheresse sur les poissons et les macro-invertébrés. La médiane n'est ici pas utilisée car il y a trop peu d'évènements par plage. Par défaut, le déficit vaut 0 lorsqu'il n'ya pas d'évènement de sécheresse.
+
+```{r}
+# calcul de la sévérité moyenne par plage 
+
+minv_plage_deficit<-minv_event_deficit %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(mean_deficit=mean(deficit))
+
+df<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),mean_deficit=as.numeric(c(0,0,0,0,0,0)))
+
+minv_plage_deficit<-rbind(minv_plage_deficit, df)
+
+minv_plage_deficit$plage_minv<-ordered(minv_plage_deficit$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+```
+
+On peut également calculer la somme de la sévérité des évènements de sécheresse par plage :
+
+```{r}
+df<-minv_event_deficit %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(sum_deficit=sum(deficit))
+
+df2<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),sum_deficit=as.numeric(c(0,0,0,0,0,0)))
+
+df<-rbind(df,df2)
+
+minv_plage_deficit<-merge(minv_plage_deficit, df, by="plage_minv")
+
+minv_plage_deficit<-minv_plage_deficit %>% 
+  arrange(plage_minv)
+```
+
+```{r}
+#Affichage 
+
+minv_plage_deficit
+```
+
+## Intensité des évènements
+
+L'intensité de chaque évènement de sécheresse est égale au rapport de sa sévérité sur sa durée.
+
+```{r}
+# rassemblement en un seul data frame de la sévérité et de la durée par évènement et par plage 
+
+minv_event_carac<-merge(minv_event_duration, minv_event_deficit, by=c("event", "plage_minv"))
+
+# calcule de l'intensité de chaque évènement par plage 
+
+minv_event_carac<-minv_event_carac %>% 
+  mutate(intensity=deficit/duration)
+  
+```
+
+```{r}
+#représentation de l'intensité de chaque évènement
+
+minv_event_carac %>% 
+  ggplot(aes(x=event, y=intensity, fill=plage_minv))+
+  geom_col()+  
+  geom_text(aes(label=(round(intensity, digits=2))),position = position_stack(0.5), color="black", size=3)+
+  ylab("Intensité (en l/s)")+
+  xlab("Evènement")+
+  scale_fill_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                                "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                                "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c',"10"='#fabebe', "11"='#008080'))
+
+```
+
+On peut calculer la moyenne de l'intensité pour chaque plage, qui servira ensuite pour l'étude de l'effet de la sécheresse sur les poissons et les macro-invertébrés. La médiane n'est ici pas utilisée car il y a trop peu d'évènements par plage. Par défaut, l'intensité vaut 0 lorsqu'il n'y a pas d'évènement de sécheresse.
+
+```{r}
+# calcul de l'intensité moyenne par plage 
+
+minv_plage_carac<-minv_event_carac %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(mean_intensity=mean(intensity))
+
+df<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),mean_intensity=as.numeric(c(0,0,0,0,0,0)))
+
+minv_plage_carac<-rbind(minv_plage_carac, df)
+minv_plage_carac<-merge(minv_plage_carac,  minv_plage_deficit, by="plage_minv")
+minv_plage_carac<-merge(minv_plage_carac,  minv_plage_duration, by="plage_minv")
+
+minv_plage_carac<-minv_plage_carac %>% 
+  mutate(sum_intensity=sum_deficit/sum_duration) # calcul de l'intensité totale 
+
+minv_plage_carac[is.nan(minv_plage_carac$sum_intensity) ,"sum_intensity"] <- 0 #remplacement des NaN (0/0 impossible) par des 0
+
+minv_plage_carac$plage_minv<-ordered(minv_plage_carac$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+minv_plage_carac<-minv_plage_carac %>% 
+  arrange(plage_minv)
+
+```
+
+```{r}
+#Affichage 
+
+minv_plage_carac
+```
+
+### Saison des évènements
+
+Le but ici est de déterminer pour chaque évènement à quelle ou quelles saison ils se sont produits. Les saisons seront approximées en fonction des mois de l'année telles que :
+
+Hiver = Décembre + Janvier + Février\
+Printemps = Mars + Avril +Mai\
+Eté = Juin + Juillet + Aout\
+Automne = Septembre + Octobre + Novembre
+
+```{r}
+#création dans minv drought final d'une colonne de saison 
+
+minv_drought_final<-minv_drought_final %>% 
+  mutate(mois=as.factor(month(date_obs_elab))) # création d'une colonne de mois 
+
+minv_drought_final[minv_drought_final$mois %in% c("1", "2", "12") ,"saison"] <- "Hiver" 
+minv_drought_final[minv_drought_final$mois %in% c("3", "4", "5") ,"saison"] <- "Printemps" 
+minv_drought_final[minv_drought_final$mois %in% c("6", "7", "8") ,"saison"] <- "Ete" 
+minv_drought_final[minv_drought_final$mois %in% c("9", "10", "11") ,"saison"] <- "Automne" # création de la colonne de saison et de ses modalités 
+
+minv_drought_final$saison<-as.factor(ordered(minv_drought_final$saison, levels=c("Hiver", "Printemps", "Ete", "Automne"))) # conversion en facteur ordonnée de la colonne saison 
+
+
+```
+
+```{r}
+# identification de la saison de chaque èvenement par plage 
+
+minv_season<-minv_drought_final %>% 
+  select(date_obs_elab, plage_minv, event, saison) %>% 
+  dplyr::group_by(plage_minv, event, saison) %>% 
+  distinct(saison)
+
+minv_season
+
+```
+
+Dans le tableau ci-dessus, pour chaque évènement, sont notées les saisons pendant lesquelles s'est produit l'évènement (s'il y a deux saisons pour le même évènement de la même plage, deux lignes avec deux saisons différentes sont affichées).
+
+On peut constater que la majorité des évènements se sont produits en totalité ou en partie en été. Aucun évènement ne s'est produit au printemps ou en hiver. 
+
+
+```{r}
+#ajout de la saison aux caractéristiques des évènements 
+
+minv_event_carac<-merge(minv_event_carac, minv_season, by=c("event", "plage_minv"))
+```
+
+```{r, eval=FALSE}
+#sauvegarde du df "minv_event_carac" qui contient la caractérisation des évènements de sécheresse 
+
+save(minv_event_carac, file="processed_data/minv_event_carac.RData")
+```
+
+### Nombre d'évènements par plage
+
+```{r}
+minv_nb_event_plage<-minv_drought_final %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr::summarise(nb_event=n_distinct(event)) #conte pour chaque plage le nombre d'évènements distincts 
+
+df<-data.frame(plage_minv=as.factor(c("3", "4", "5", "7", "9", "11")),nb_event=as.numeric(c(0,0,0,0,0,0))) #création des plages sans évènements (0 par défaut)
+
+minv_nb_event_plage<-rbind(minv_nb_event_plage, df) # ajout des plages sans évènements 
+
+minv_nb_event_plage$plage_minv<-ordered(minv_nb_event_plage$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11")) #ordonnement des niveaux de facteur "plage"
+
+minv_nb_event_plage<-
+  arrange(minv_nb_event_plage, plage_minv) #ordonnement par plage lorsque l'on affiche le df 
+
+minv_nb_event_plage #affichage
+
+```
+
+
+```{r}
+# ajout du nombre d'évènement au df plage_carac 
+
+minv_plage_carac<-merge(minv_plage_carac, minv_nb_event_plage, by="plage_minv")
+```
+
+```{r}
+#sauvegarde du df de caractéristiques des plages 
+
+save(minv_plage_carac, file="processed_data/minv_plage_carac.RData")
+```
+
+# Evolution de la température sur la période d'étude 
+
+Cette partie a pour but de calculer des indicateurs qui permetteront d'étudier l'effet de la température sur les poissons et macro-invertébrés pour chacune des plages d'étude. 
+
+## Complétion de la chronique de températures journalières 2008-2018 sur la période 2008-2021 
+
+```{r}
+#Import et formatage des données de températures de l'API 
+
+temp_marie <- get_temperature_chronique(
+  code_station = '03134730',
+  date_debut_mesure = "2019-01-01", #premier jours sans données RNT-TIGRE 
+  date_fin_mesure = "2020-01-01"  # jour qui permet d'importer les données (limitées à 20000 lignes)
+) 
+
+temp_marie_2<-get_temperature_chronique(
+  code_station = '03134730',
+  date_debut_mesure = "2020-01-02",  
+  date_fin_mesure = "2021-08-18"  #dernier jour de la plage 11
+) 
+
+temp_marie<-rbind(temp_marie, temp_marie_2)
+
+temp_marie<-temp_marie %>% 
+  select(code_station, date=date_mesure_temp, heure=heure_mesure_temp, Tw=resultat) %>% #seelction des colonnes qui nous intéressent 
+  mutate(date=as.Date(ymd(date))) #passage de la colonne date en format date année-mois-jour 
+
+statut<-rep("reel", each=nrow(temp_marie)) #création d'un vecteur de la même longeur que df "temp_marie" contenat le statut de la donnée de température (uniquement de la donnée réelle, donc que des "reel" répétés)
+
+temp_marie<-cbind(temp_marie, statut) #jointure de la colonne de statut avec le reste du df 
+temp_marie$statut<-as.factor(temp_marie$statut)
+
+``` 
+
+
+```{r}
+#calcul des moyennes journalières pour les données réelles après 2018 
+
+temp_marie_jr<-temp_marie %>% 
+  dplyr::group_by(code_station, date, statut) %>% 
+  dplyr::summarise(Tw=mean(Tw)) %>% 
+  select(code_station, date, Tw, statut) %>% 
+  arrange()
+
+
+```
+
+Après traitement, les données issues de l'API Temperature ressemblent à : 
+
+```{r}
+head(temp_marie_jr)
+```
+
+Avec Tw étant la température moyenne journalière de l'eau et statut indiquant que la température est réelle (RNT). 
+
+```{r}
+#filtrage et formatage du tableau de températures issu de l'étude régionale (RNT+TIGRE)
+
+temp_tigre<-temperatures %>% 
+  filter(code_station=="3134730") %>% 
+  select(code_station, date=Date, Tw=Tw_fusion, statut) %>% 
+  mutate(date=dmy(date))
+  
+```
+
+```{r}
+#jointure des deux tableaux de données (mélange RNT+ TIGRE et données réelles RNT après 2018)
+
+T_marie<-rbind(temp_tigre, temp_marie_jr) #jointure des deux data frame 
+
+T_marie["code_station"][T_marie["code_station"] == "3134730"] <- "03134730" #uniformisation des codes de la station 
+
+```
+
+```{r}
+#création de la colonne de plage 
+
+T_marie[T_marie$date >=as.Date("2009-06-03") & T_marie$date <=as.Date("2010-06-03") ,"plage_minv"] <- "1"
+T_marie[T_marie$date >=as.Date("2010-06-04") & T_marie$date <=as.Date("2011-07-25") ,"plage_minv"] <- "2"
+T_marie[T_marie$date >=as.Date("2011-07-26") & T_marie$date <=as.Date("2012-05-29") ,"plage_minv"] <- "3"
+T_marie[T_marie$date >=as.Date("2012-05-30") & T_marie$date <=as.Date("2013-08-28") ,"plage_minv"] <- "4"
+T_marie[T_marie$date >=as.Date("2013-08-29") & T_marie$date <=as.Date("2014-07-22") ,"plage_minv"] <- "5"
+T_marie[T_marie$date >=as.Date("2014-07-23") & T_marie$date <=as.Date("2015-10-05") ,"plage_minv"] <- "6"
+T_marie[T_marie$date >=as.Date("2015-10-06") & T_marie$date <=as.Date("2016-08-06") ,"plage_minv"] <- "7"
+T_marie[T_marie$date >=as.Date("2016-08-07") & T_marie$date <=as.Date("2018-07-17") ,"plage_minv"] <- "8"
+T_marie[T_marie$date >=as.Date("2018-07-18") & T_marie$date <=as.Date("2019-06-13") ,"plage_minv"] <- "9"
+T_marie[T_marie$date >=as.Date("2019-06-14") & T_marie$date <=as.Date("2020-09-23") ,"plage_minv"] <- "10"
+T_marie[T_marie$date >=as.Date("2020-09-24") & T_marie$date <=as.Date("2021-08-18") ,"plage_minv"] <- "11"
+
+T_marie$plage_minv<-as.factor(T_marie$plage_minv)
+ 
+T_marie$plage_minv<-ordered(T_marie$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+```
+
+```{r}
+#filtrage des plages 
+
+T_marie<- T_marie %>% 
+  drop_na()
+```
+
+Le data frame final des températures de la Sainte-marie ressemble à :
+
+```{r}
+head(T_marie)
+```
+
+```{r}
+#plot de la température journalière sur les plages 2 à 7 en fonction du statut 
+
+T_marie %>% 
+  ggplot(aes(x=date, y=Tw, color=statut, group=1))+
+  geom_line()+
+  theme(axis.text.x = element_text(angle = 90))+
+  scale_x_date(date_breaks = "2 month")+ 
+  theme(axis.text.x = element_text(size = 6))+
+  xlab("Date")+
+  ylab("Température (en °C)")+
+  facet_wrap(~plage_minv, scale="free")
+  
+  
+```
+
+## Effet de la sécheresse sur la température de l'eau 
+
+Les indicateurs températures moyennes et maximales ainsi que la température maximum moyenne sur 7 jours consécutifs par plages seront calculés. Ils pourront être corrélés avec les indicateurs de sécheresse par plage afin de voir si la sécheresse a une influence sur la température de l'eau. Les indicateurs de température par évènement ne peuvent pas être utilisés pour construire un indicateur par plage car les évènements se situent à des saisons différentes.
+
+
+```{r}
+#calcul de la température moyenne et maximale par plage 
+
+T_carac_plage<-T_marie %>% 
+  dplyr::group_by(code_station, plage_minv) %>% 
+  dplyr::summarise(Tmoy=mean(Tw), Tmax=max(Tw)) 
+
+```
+
+```{r}
+# calcul de la température maximale moyenne sur 7 jours consécutifs par plage 
+
+dates<-T_marie$date #création d'un vecteur de dates
+
+dates<-sort(dates, decreasing = FALSE)  # classement des dates dans l'ordre croissant 
+
+Tmax_7jr<-
+  mean_run(T_marie$Tw,   # calcul d'une moyenne glissante des températures sur k=7 jours 
+                       k = 7, 
+                       idx = dates
+                       )
+
+Tmax_7jr<-data.frame(code_station=rep(c("03138390"),each=length(Tmax_7jr)), date=dates, Tmax_7jr) # création d'un data frame avec les moyennes glissantes, les dates, et le code de la station
+
+Tmax_7jr<-merge(T_marie, Tmax_7jr, by="date") #jointure par les dates pour avoir les plages 
+
+Tmax_7jr<-Tmax_7jr %>% 
+  select(code_station=code_station.x, date, plage_minv, Tmax_7jr)
+
+
+Tmax_7jr<-Tmax_7jr %>% 
+  dplyr::group_by(code_station, plage_minv) %>% 
+  dplyr::summarise(Tmax_7jr_plage=max(Tmax_7jr))
+```
+
+
+```{r}
+#ajout de la colonne Tmax_7jr au data frame T_carac_plage
+
+T_carac_plage<-cbind(T_carac_plage, Tmax_7jr=Tmax_7jr$Tmax_7jr_plage)
+```
+
+```{r}
+#affichage du data frame d'indicateurs par plage 
+
+T_carac_plage
+
+```
+
+```{r, eval=FALSE}
+save(T_carac_plage, file="processed_data/indic_temp_minv.RData")
+```
+
+```{r}
+#représentation graphique des indicateurs de température par plage 
+
+df <- reshape2::melt(T_carac_plage, id.vars = "plage_minv")
+
+df<-df %>% 
+    filter(variable %in% c("Tmoy", "Tmax", "Tmax_7jr")) %>% 
+  mutate(value=as.numeric(value))
+
+df %>% 
+  ggplot(aes(x=plage_minv, y=value, fill=variable))+
+  geom_col(position="dodge")+
+  xlab("Plage")+
+  ylab("Température (en °C)")+
+  scale_fill_manual(values = c("Tmax" = 'red', "Tmoy"='pink3', 
+                                "Tmax_7jr"= 'yellow'))
+  
+```
+On observe une faible évolution de la température de l'eau selon les plages. 
+
+
+```{r}
+#matrice de corrélation de spearman 
+
+cor_mx<-cor(x=data.frame(mean_intensity=minv_plage_carac$mean_intensity, 
+                         mean_deficit=minv_plage_carac$mean_deficit, 
+                         total_deficit=minv_plage_carac$sum_deficit,
+                         mean_duration=minv_plage_carac$mean_duration,
+                         total_duration=minv_plage_carac$sum_duration,
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr), method="spearman")
+
+cor_mx2<-rcorr(x=as.matrix(data.frame(mean_intensity=minv_plage_carac$mean_intensity, 
+                         mean_deficit=minv_plage_carac$mean_deficit, 
+                         total_deficit=minv_plage_carac$sum_deficit,
+                         mean_duration=minv_plage_carac$mean_duration,
+                         total_duration=minv_plage_carac$sum_duration,
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr)), type="spearman")
+diag(cor_mx2$P) <- 0
+```
+
+```{r}
+#représentation graphique de la corrélation de spearman 
+
+par(mfrow=c(1,2))
+
+corrplot(cor_mx, type="upper", order="hclust", tl.col="black", tl.srt=90)
+corrplot(cor_mx2$r, type="upper", order="hclust", 
+         p.mat = cor_mx2$P, sig.level = 0.05, insig = "blank")
+
+
+```
+
+Les graphiques ci-dessus représentent les matrice de corrélation des indicateurs de sécheresse et de températures. Le graphique de gauche montre tous les coefficient de corrélation tandis que celui de droite n'affiche que les coefficients des corrélations significatives (p-value<0,05). Les colonnes 4 à 8 des trois premières lignes sont celles qui apportent des informations sur la corrélation entre les indicateurs de sécheresse et de température. On peut remarquer que toutes les corrélations entre ces pramètre sont faibles. Aucune de ces corrélations n'est signifiative. 
+
+# Construction d'un data frame de qualité chimique de l'eau 
+
+```{r}
+#Import des fichiers csv de Naiades 
+
+#nitrates 
+
+nitrates_marie<-read.csv(file = "raw_data/nitrates_marie.CSV", sep=";")
+
+nitrates_marie<-nitrates_marie %>% 
+  mutate(date=dmy(date)) 
+
+#ammonium 
+
+ammonium_marie<-read.csv(file = "raw_data/ammonium_marie.CSV", sep=";")
+
+ammonium_marie<-ammonium_marie %>% 
+  mutate(date=dmy(date)) 
+
+#dioxygène dissout 
+
+o2_marie<-read.csv(file = "raw_data/o2_marie.CSV", sep=";")
+
+o2_marie<-o2_marie %>% 
+  mutate(date=dmy(date)) 
+
+# conductivité à 25 °C 
+
+conduc_marie<-read.csv(file = "raw_data/conduc_marie.CSV", sep=";")
+
+conduc_marie<-conduc_marie %>% 
+  mutate(date=dmy(date)) 
+
+
+```
+
+```{r}
+#construction d'un seul data frame de qualité chimique 
+
+quali_chimique<-rbind(nitrates_marie, ammonium_marie, o2_marie, conduc_marie)
+
+quali_chimique<-quali_chimique %>% 
+  mutate(param=as.factor(param)) %>% 
+  mutate(month=as.factor(month(date)))
+
+```
+
+```{r}
+save(quali_chimique, file="raw_data/quali_chimique.RData")
+```
+
+```{r}
+
+#création colonne de plage 
+
+quali_chimique[quali_chimique$date >=as.Date("2009-06-03") & quali_chimique$date <=as.Date("2010-06-03") ,"plage_minv"] <- "1"
+quali_chimique[quali_chimique$date >=as.Date("2010-06-04") & quali_chimique$date <=as.Date("2011-07-25") ,"plage_minv"] <- "2"
+quali_chimique[quali_chimique$date >=as.Date("2011-07-26") & quali_chimique$date <=as.Date("2012-05-29") ,"plage_minv"] <- "3"
+quali_chimique[quali_chimique$date >=as.Date("2012-05-30") & quali_chimique$date <=as.Date("2013-08-28") ,"plage_minv"] <- "4"
+quali_chimique[quali_chimique$date >=as.Date("2013-08-29") & quali_chimique$date <=as.Date("2014-07-22") ,"plage_minv"] <- "5"
+quali_chimique[quali_chimique$date >=as.Date("2014-07-23") & quali_chimique$date <=as.Date("2015-10-05") ,"plage_minv"] <- "6"
+quali_chimique[quali_chimique$date >=as.Date("2015-10-06") & quali_chimique$date <=as.Date("2016-08-06") ,"plage_minv"] <- "7"
+quali_chimique[quali_chimique$date >=as.Date("2016-08-07") & quali_chimique$date <=as.Date("2018-07-17") ,"plage_minv"] <- "8"
+quali_chimique[quali_chimique$date >=as.Date("2018-07-18") & quali_chimique$date <=as.Date("2019-06-13") ,"plage_minv"] <- "9"
+quali_chimique[quali_chimique$date >=as.Date("2019-06-14") & quali_chimique$date <=as.Date("2020-09-23") ,"plage_minv"] <- "10"
+quali_chimique[quali_chimique$date >=as.Date("2020-09-24") & quali_chimique$date <=as.Date("2021-08-18") ,"plage_minv"] <- "11"
+
+quali_chimique$plage_minv<-as.factor(quali_chimique$plage_minv)
+ 
+quali_chimique$plage_minv<-ordered(quali_chimique$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+
+```
+
+
+```{r}
+quali_chimique %>% 
+  filter(param == "Conductivite") %>% 
+  ggplot(aes(x=date, y=resultat, color=plage_minv, group=1))+
+  geom_point(size=0.7)+
+  geom_line()+
+  scale_x_date(date_breaks = "4 month")+
+  theme(axis.text.x = element_text(angle = 90))+
+   theme(axis.text.x = element_text(size = 6))+
+  xlab("Date")+
+  ylab("Conductivité à 25 °C (en uS/cm)")+
+    scale_color_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                                "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                                "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c',"10"='#fabebe', "11"='#008080'))
+```
+## Calcul de l'indicateur de concentration en O2 dissout 
+
+L'indicateur de concentration en O2 dissout sera simplement la moyenne ou médiane par plage de la concentration en O2 dissout. 
+
+```{r}
+#création d'un data frame de concentration moyenne et médiane (au cas où) en O2 dissout par plage 
+
+o2_minv_plage<-quali_chimique %>% 
+  filter(param=="Oxygene dissous" & plage_minv %in% c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11")) %>% 
+  dplyr::group_by(plage_minv) %>% 
+  dplyr:: summarise(mean_o2=mean(resultat), med_o2=median(resultat))
+
+o2_minv_plage
+```
+
+```{r}
+save(o2_minv_plage, file="processed_data/o2_minv.RData")
+```
+

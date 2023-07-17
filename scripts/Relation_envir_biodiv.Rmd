@@ -1,0 +1,1040 @@
+---
+title: "Influence des paramètres environnementaux liés à la sécheresse sur les poissons de la Sainte-Marie à Glaignes"
+author: "Imane PALAGI"
+date: "2023-07-03"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message=FALSE, warning=FALSE)
+```
+
+Cette deuxième partie de l'étude de la sécheresse hydrologique sur les poissons de la station SANDRE de la Sainte-Marie à Glaignes a pour but de mettre en relation les indicateurs environnementaux et de biodiversité. Les indicateurs environnementaux ont été calculés dans le script RMarkdown "Param_environnement_st_marie" consultable dans le projet R "sainte_marie", dans le dossier "scripts". 
+
+```{r}
+# Chargement des packages necessaires
+
+library(tidyverse) 
+library(hubeau) #package pour les données de débits 
+library(ggpubr) # package pour la réalisation de certains graphiques 
+library(hydroTSM) #package traitement/analyse de séries temporelles liées à l'hydrologie 
+library(runner) # pour le calcule de moyennes glissantes 
+library(lfstat) #pour l'identification/regroupement d'évènements de sécheresse 
+library(Hmisc) #pour le calculde de matrices de corrélation avec p-values 
+library(corrplot) #pour la visualisation de matrices de corrélations 
+library(FactoMineR) # pour ACP par exemple 
+library(vegan) #pour tests sur données écologiques 
+library(ade4) #stats sur données écologiques 
+library(lme4) #GLM
+library(lmtest)
+library(lmPerm)
+```
+
+
+# Construction des data frame d'indicateurs piscicoles 
+
+Cette partie a pour but de construir des tableaux de données qui recensent pour chaque plage d'étude (définies dans les Rmarkdown "Param_environnement_st_marie") les indicateurs piscicoles associés. Pour rappel, la date de l'indicateur poisson correspond toujours au dernier jour de la plage qui lui est associée. 
+
+## IPR et métriques de l'IPR 
+
+```{r}
+#importation du data frame d'IPR et métriques pour la sainte-marie 
+
+load(file="raw_data/ipr_stmarie.RData")
+```
+
+```{r}
+#filtre des colonnes qui nous intéréssent 
+
+ipr_stmarie<-ipr_stmarie %>% 
+  select(ipr, cli_libelle, ope_date, annee, ner:dti)
+
+#ajout de la colonne de plage 
+
+ipr_stmarie[ipr_stmarie$annee=="2008" ,"plage"] <- "1"
+ipr_stmarie[ipr_stmarie$annee =="2010","plage"] <- "2"
+ipr_stmarie[ipr_stmarie$annee =="2012" ,"plage"] <- "3"
+ipr_stmarie[ipr_stmarie$annee == "2013" ,"plage"] <- "4"
+ipr_stmarie[ipr_stmarie$annee == "2014","plage"] <- "5"
+ipr_stmarie[ipr_stmarie$annee == "2016" ,"plage"] <- "6"
+ipr_stmarie[ipr_stmarie$annee == "2018" ,"plage"] <- "7"
+ipr_stmarie[ipr_stmarie$annee == "2020" ,"plage"] <- "8"
+ipr_stmarie[ipr_stmarie$annee == "2022" ,"plage"] <- "9"
+
+ipr_stmarie$plage<-as.factor(ipr_stmarie$plage)
+ 
+ipr_stmarie$plage<-ordered(ipr_stmarie$plage, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9"))
+```
+
+```{r}
+ipr_stmarie<-ipr_stmarie %>% 
+  arrange(plage)
+```
+
+```{r}
+ipr_stmarie
+```
+
+## Mesures individuelles 
+
+```{r}
+# importation du data frame de mesures individuelles pour les Hauts-de-France
+
+load(file="raw_data/mei_hdf.RData")
+
+```
+
+```{r}
+# filtrage des mesures individuelles pour la station de la sainte-marie 
+
+mei_marie<-mei_hdf %>% 
+  filter(sta_id=="5483") %>% 
+  select(ope_date, annee, esp_code_alternatif, esp_nom_commun, mei_taille)
+
+mei_marie[mei_marie$annee=="2008" ,"plage"] <- "1"
+mei_marie[mei_marie$annee =="2010","plage"] <- "2"
+mei_marie[mei_marie$annee =="2012" ,"plage"] <- "3"
+mei_marie[mei_marie$annee == "2013" ,"plage"] <- "4"
+mei_marie[mei_marie$annee == "2014","plage"] <- "5"
+mei_marie[mei_marie$annee == "2016" ,"plage"] <- "6"
+mei_marie[mei_marie$annee == "2018" ,"plage"] <- "7"
+mei_marie[mei_marie$annee == "2020" ,"plage"] <- "8"
+mei_marie[mei_marie$annee == "2022" ,"plage"] <- "9"
+
+mei_marie$plage<-as.factor(mei_marie$plage)
+ 
+mei_marie$plage<-ordered(mei_marie$plage, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9"))
+```
+
+Les données de mesures individuelles de la station de la Sainte-Marie à Glaignes présentent plus d'années que les données d'IPR : les années 1987, 1988, 2005 et 2006 sont également disponibles. Toutefois, les indicateurs environnementaux ayant été calculés pour les plages construites à partir des dates associées aux IPR, la période d'étude ne sera pas allongée pour les mesures individuelles. (il serait possible de rajouter les années 2005 et 2006 à la période d'étude et de créer deux nouvelles plages)
+
+```{r}
+#filtrage des années 2008 à 2022
+
+mei_marie<-mei_marie %>% 
+  filter(ope_date >= as.POSIXct("2006-10-08")) %>% 
+  mutate(ope_date=substr(ope_date, 1,10)) %>% 
+  mutate(ope_date=ymd(ope_date))
+
+```
+
+```{r}
+#ordonnement du data frame 
+
+mei_marie<-mei_marie %>% 
+  arrange(ope_date)
+```
+
+Le data frame de données de mesures individuelles ressemble à (10 premières lignes): 
+
+```{r}
+head(mei_marie, 10)
+```
+
+# Influence de la sécheresse sur les poissons 
+
+Le but de cette partie est de mettre en relation les indicateurs environnementaux et piscicoles pour les 9 plages d'étude, afin de déterminer s'il est possible de mettre en évidence un effet de la sécheresse sur les poissons. 
+
+## Selection des indicateurs environnementaux 
+
+La première étape de l'analyse est de déterminer grâce à une ACP et une matrice de corrélation si certains indicateurs environnementaux sont corrélés (principe de parcimonie + éviter l'autocorrélation dans les éventuels modèles).
+
+```{r}
+# ACP sur les plages 2 à 8 (pour inclure la température)
+
+acptest<-cbind(T_carac_plage,o2_plage[2:8,], plage_carac[2:8,])
+acptest<-acptest %>% 
+  select(Tmoy, Tmax, Tmax_7jr,mean_o2, sum_intensity, sum_deficit, sum_duration, nb_event)
+
+pca<-PCA(acptest)
+summary(pca)
+pca$var
+
+```
+
+Le cercle des corrélation ci-dessus permet de montrer que les indicateurs nb_event, Tmax_7jr et Tmax sembles fortement corrélés.Sum_duration et nb_event le semblent de même. Il serait donc judicieux de ne garder qu'un seul indicateur chaque fois.  
+
+*Attention* : comme les plages étudiées ci-dessus sont les plages 2 à 8, les individus 1 à 7 de l'ACP correspondent aux plages 2 à 8. 
+
+Pour valider la selection des indicateurs, il est possible de calculer une matrice de corrélation. Les indicateurs de type différent dont le coeffcient de corrélation (significatif) est suppérieur à 0,6 seront soumis à selection. 
+
+```{r}
+cor_mx<-cor(x=data.frame(sum_intensity=plage_carac$sum_intensity[2:8], 
+                         sum_deficit=plage_carac$sum_deficit[2:8], 
+                         sum_duration=plage_carac$sum_duration[2:8],
+                         nb_event=plage_carac$nb_event[2:8],
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr,
+                        mean_o2=o2_plage$mean_o2[2:8]),
+            method="spearman")
+
+cor_mx2<-rcorr(x=as.matrix(data.frame(sum_intensity=plage_carac$sum_intensity[2:8], 
+                         sum_deficit=plage_carac$sum_deficit[2:8], 
+                         sum_duration=plage_carac$sum_duration[2:8],
+                         nb_event=plage_carac$nb_event[2:8],
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr,
+                        mean_o2=o2_plage$mean_o2[2:8])), type="spearman")
+diag(cor_mx2$P) <- 0
+```
+
+```{r}
+#représentation graphique de la corrélation de spearman 
+
+par(mfrow=c(1,2))
+
+corrplot(cor_mx, type="upper", order="hclust", tl.col="black", tl.srt=90)
+corrplot(cor_mx2$r, type="upper", order="hclust", 
+         p.mat = cor_mx2$P, sig.level = 0.05, insig = "blank")
+
+
+```
+
+Les graphiques ci-dessus représentent les matrice de corrélation des indicateurs environnementaux. Le graphique de gauche montre tous les coefficient de corrélation tandis que celui de droite n'affiche que les coefficients des corrélations significatives (p-value<0,05).
+nb_event est effectivement significativement corrélé à sum_duration et en plus à sum_deficit. On n'étudiera donc pas nb_event. Tmax et Tmax_7jr ne sont pas significativement corrélés (et r^2<0,6), mais comme Tmax n'apporte pas une information essentielle en plus (Tmax 7jr apporte déjà une information sur la température max et de façon plus fiable, cad moins sensible aux erreurs de mesure), on ne la garde pas. mean_o2 et sum_intensity sont significativement corrélés (négativement), mais comme ils sont de "type" différent, ils seront tous les deux gardés. 
+
+
+```{r}
+
+# ACP sur les plages 1 à 9 
+
+acptest<-cbind(o2_plage, plage_carac)
+acptest<-acptest %>% 
+  select(mean_o2, sum_intensity, sum_deficit, sum_duration, nb_event)
+
+acptest<-acptest[,-1]#suppression de la première colonne qui est celle du code station que R remet automatiquement psk il pense bien faire (si jamais la colonne de code n'est plus là, cette ligne ne doit pas être executée)
+
+pca<-PCA(acptest)
+summary(pca)
+pca$var
+```
+
+Le cercle des corrélations ci-dessus montre qu'à priori nb_event et sum_duration sont fortement corrélés. 
+
+
+```{r}
+cor_mx<-cor(x=data.frame(sum_intensity=plage_carac$sum_intensity, 
+                         sum_deficit=plage_carac$sum_defici, 
+                         sum_duration=plage_carac$sum_duration,
+                         nb_event=plage_carac$nb_event,
+                        mean_o2=o2_plage$mean_o2),
+            method="spearman")
+
+cor_mx2<-rcorr(x=as.matrix(data.frame(sum_intensity=plage_carac$sum_intensity, 
+                         sum_deficit=plage_carac$sum_defici, 
+                         sum_duration=plage_carac$sum_duration,
+                         nb_event=plage_carac$nb_event,
+                        mean_o2=o2_plage$mean_o2)), type="spearman")
+diag(cor_mx2$P) <- 0
+```
+
+```{r}
+#représentation graphique de la corrélation de spearman 
+
+par(mfrow=c(1,2))
+
+corrplot(cor_mx, type="upper", order="hclust", tl.col="black", tl.srt=90)
+corrplot(cor_mx2$r, type="upper", order="hclust", 
+         p.mat = cor_mx2$P, sig.level = 0.05, insig = "blank")
+
+
+```
+
+Effectivement, nb_event est significativement corrélé à plusieurs indicateurs de sécheresse. Il ne sera donc pas conservé. La corrélation a également permis de montré que sum_intensity et sum_deficit sont significativement corrélés. Par conséquent, uniquement un des deux sera gardé : sum_deficit. 
+
+Pour résumer, les indicateurs conservés sont :
+
+Pour l'étude de tous les plages 1 à 9 :
+
+-concentration moyenne en O2 dissout\
+-durée totale des évènements de sécheresse\
+-deficit total des évènements de sécheresse
+
+Pour l'étude des plages 2 à 8 (ajout des indicateurs de température): 
+
+-concentration moyenne en O2 dissout\
+-durée totale des évènements de sécheresse\
+-deficit total des évènements de sécheresse\
+-intensité totale des évènements de sécheresse\ 
+-température moyenne\
+-température maximum moyenne sur 7 jours consécutifs\
+
+## Construction des data frame finaux d'indicateurs pour les analyses multivariées 
+
+Le  but de cette partie est de construir les data frame d'indicateurs qui seront les matrices des analyses multivariées qui seront appliquées. L'idée est de construire, pour les deux situations que sont l'étude de toutes les plages et l'étude des plages disposant de données de températures : 
+
+-une matrice d'indicateurs environnementaux (tous)\
+-une matrice par type d'indicateurs : indicateurs de sécheresse, indicateurs de qualité chimique de l'eau (de température et oxygène dissout)\
+-une matrice de composition des communautés\
+-une matrice d'indicateurs piscicoles (IPR et métriques)
+
+Pour tous les data frames, l'ordre des lignes correspond à l'ordre des plages du haut vers le bas (les numéros de plages ne seront pas intégrés aux data frame car ils ne doivent pas être intégrés en tant que tels aux analyses multivariées).
+
+*Attention* : pour tous les tableau consruit, il convient de vérifier avec attention que les lignes sont organisées dans l'ordre des plages 
+
+### Pour toutes les plages (sans indicateurs de température)
+
+```{r}
+#construction du data frame : indicateurs environnementaux (3indicateurs)
+
+indic_envir_poiss<-plage_carac %>% 
+  select(sum_duration, sum_deficit)
+
+indic_envir_poiss<-cbind(indic_envir_poiss, mean_o2=o2_plage$mean_o2)
+
+```
+
+Le tableau d'indicateurs environnemetaux est : 
+
+```{r}
+indic_envir_poiss
+```
+
+La tableau d'indicateurs de sécheresse est une subdivision du tableau d'indicateurs environnementaux : 
+
+```{r}
+#construction du data frame : indicateurs de sécheresse (deux indicateurs)
+
+indic_sech_poiss<-indic_envir_poiss %>% 
+  select(sum_duration, sum_deficit)
+
+indic_sech_poiss
+```
+
+Il en va de même pour le tableau d'indicateurs de qualité chimique de l'eau : 
+
+```{r}
+indic_quali_poiss<-indic_envir_poiss %>% 
+  select(mean_o2)
+
+indic_quali_poiss
+```
+
+Le tableau d'indicateurs pisicoles (IPR et métriques) est : 
+
+```{r}
+# construction du data frame de  : indicateurs pisicoles (8 indicateurs)
+
+indic_met_poiss<-ipr_stmarie %>% 
+  arrange(plage) %>% 
+  select(ipr, ner, nel, nte, dit, dio, dii, dti)
+
+indic_met_poiss
+  
+```
+
+Le tableau de composition des communautés est : 
+
+```{r}
+#construction du data frame : composition des communautés 
+
+com_poiss<-mei_marie %>% 
+  dplyr::group_by(plage,esp_code_alternatif) %>%  #compte du nombre d'individus par espèce par plage
+  dplyr::summarise(count=n()) 
+
+com_poiss<-com_poiss %>% 
+  pivot_longer(cols = esp_code_alternatif) %>%
+  pivot_wider(names_from = value, values_from=count) %>%
+  replace(is.na(.),0) %>% 
+  select(ANG:TAC)
+
+com_poiss<-com_poiss[,-1] #même soucis que cité plus haut : R conserve la colonne de plage 
+
+com_poiss
+```
+
+### Pour les plages disposant de températures 
+
+
+```{r}
+#construction du data frame : indicateurs environnementaux (5 indicateurs)
+
+Tindic_envir_poiss<-plage_carac %>% 
+  select(sum_duration, sum_deficit, sum_intensity)
+
+Tindic_envir_poiss<-cbind(Tindic_envir_poiss[2:8,], 
+                         mean_o2=o2_plage$mean_o2[2:8], 
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr)
+
+```
+
+Le tableau d'indicateurs environnementaux est : 
+
+```{r}
+Tindic_envir_poiss
+```
+
+La tableau d'indicateurs de sécheresse est une subdivision du tableau d'indicateurs environnementaux : 
+
+```{r}
+#construction du data frame : indicateurs de sécheresse (deux indicateurs)
+
+Tindic_sech_poiss<-Tindic_envir_poiss %>% 
+  select(sum_duration, sum_deficit, sum_intensity)
+
+Tindic_sech_poiss
+```
+
+Il en va de même pour le tableau d'indicateurs de qualité chimique (température et o2 dissout) de l'eau : 
+
+```{r}
+Tindic_quali_poiss<-Tindic_envir_poiss %>% 
+  select(mean_o2, Tmoy, Tmax_7jr)
+
+Tindic_quali_poiss
+```
+
+Pour les tableau d'indicateurs IPR+métriques et de la composition des communautés, une simple selection directe des lignes 2 à 8 construira les tableau pour les plages 2 à 8. 
+
+```{r, eval=FALSE}
+save(indic_envir_poiss, indic_sech_poiss, indic_quali_poiss, indic_met_poiss, indic_minv_poiss, Tindic_envir_poiss, Tindic_quali_poiss, Tindic_sech_poiss, file="raw_data/indic_analyses_multivariees.RData")
+```
+
+
+## Effet des paramètres environnementaux sur la composition des communautés 
+
+### Représentation des dissimilarités entre communautés selon les plages 
+
+La représentation graphique des communautés pisicoles selon les plages se fera grâce à une NMDS (Non-metric Multi Dimentional Scaling) à partir d'une matrice de distance de Bray-curtis. L'interprétation graphique d'une NMDS est simple : plus deux points sont proches, plus les communautés qu'ils représentent sont similaires. 
+
+
+```{r}
+#NMDS 
+
+NMDS_poiss<-metaMDS(com_poiss, k=2, dist="bray", autotransform = FALSE)
+```
+Le stress de la NMDS (stress final environ égal à 0,02) indique d'après (Clarke,1993) une excellente représentation par la NMDS des dissimilarités entre communautés. 
+
+```{r}
+#plot du stress de la NMDS 
+
+stressplot(NMDS_poiss)
+```
+
+```{r}
+#représentation graphique de la nmds 
+
+data.scores = as.data.frame(scores(NMDS_poiss)$sites)
+data.scores$plage<-c("1", "2", "3", "4", "5", "6", "7", "8", "9")
+
+data.scores %>% 
+  ggplot(aes(x=NMDS1, y=NMDS2, color=plage))+
+  geom_point(size=3)+
+  scale_color_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                               "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                               "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c'))+
+  geom_text(aes(label=plage),nudge_x = 0, nudge_y = 0.05, color="black", size=3)
+
+```
+
+ON peut constater sur le graphique ci-dessus que les plages 5 et 8 présentent une communuaté très similaire. On peut globalement identifier trois cluster : le cluster 1,2,3,4, le cluster 6,5,8, et le cluster 7,9. Il semblerait y avoir une évolution graduelle chronologique de la composition de la communauté.  
+
+```{r}
+#plot des vecteurs environnementaux 
+
+en = envfit(NMDS_poiss, indic_envir_poiss, permutations = 999, na.rm = TRUE)
+en_coord_cont = as.data.frame(scores(en, "vectors"))
+
+ ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, color=plage)) + 
+     geom_point(data = data.scores, size = 3) +
+   geom_text(aes(label=plage),nudge_x = 0, nudge_y = 0.05, color="black", size=3)+
+     scale_colour_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                               "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                               "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c'))  + 
+     geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), 
+       data = en_coord_cont, size =1, colour = "grey30")  + 
+     geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", 
+       fontface = "bold", label = row.names(en_coord_cont))  
+     
+```
+
+La graphique ci-dessus contient en plus de graphique précédent les vecteurs environnementaux représentés dans le même espace que les communautés. Les vecteurs sont à interpréter comme des sortes d'axes : si une communauté suit un vecteur, elle est influencée par celui-ci. Dans notre cas, les communautés semble peu influencées par les indicateurs environnementaux. 
+
+```{r}
+#plot des vecteurs espèces
+
+en = envfit(NMDS_poiss, com_poiss, permutations = 999, na.rm = TRUE)
+en_coord_cont = as.data.frame(scores(en, "vectors"))
+
+  ggplot(data = data.scores, aes(x = NMDS1, y = NMDS2, color=plage))+
+     scale_colour_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                               "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                               "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c'))  + 
+     geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), 
+       data = en_coord_cont, size =0.8, colour = "grey40")  + 
+     geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "black", 
+       label = row.names(en_coord_cont), size=3)+  
+     geom_point(data = data.scores, size = 4) +
+    geom_text(aes(label=plage),nudge_x = 0, nudge_y = 0.05, color="black", size=3, fontface="bold")
+  
+```
+
+Le graphique ci-dessus montre quelles espèces influencent les évolutions dans la composition des communautés. ON peut par exemple voir que les communautés des plages 1,2,3 et 4 sont très influencées par les Chabots, les Loches Franches et les Epinochettes. Les communautés des plages 5,6,et 8 sont très inflencées par les Rotengle tandis que celles des plages 7 et 9 le sont par les Vairons. Toutefois, si l'on inspecte la maatrice de composition des communautés, on constate qu'uniquement un seul Rotengle a été pêché sur les 9 plages. Il ne peut donc pas réellement influencer la composition des communautés. 
+Peut-être qu'il faudrait supprimer les espèces qui ne présentent que 1 observation. 
+
+Il est possible de refaire une NMDS et ses représentation graphique avec les communautés des plages 2 à 8, qui pourront être mises en relation (visuelle) avec les indicateurs de température. 
+
+
+```{r}
+#NMDS 
+
+NMDS_poiss2<-metaMDS(com_poiss[2:8,], k=2, dist="bray", autotransform = FALSE)
+```
+
+```{r}
+#plot des vecteurs environnementaux avec température 
+
+data.scores2 = as.data.frame(scores(NMDS_poiss2)$sites)
+data.scores2$plage<-c("2", "3", "4", "5", "6", "7", "8")
+
+en = envfit(NMDS_poiss2, Tindic_envir_poiss, permutations=999)
+en_coord_cont = as.data.frame(scores(en, "vectors"))
+
+ ggplot(data = data.scores2, aes(x = NMDS1, y = NMDS2, color=plage)) + 
+     geom_point(data = data.scores2, size = 3) +
+   geom_text(aes(label=plage),nudge_x = 0, nudge_y = 0.05, color="black", size=3)+
+     scale_colour_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                               "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                               "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c'))  + 
+     geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), 
+       data = en_coord_cont, size =1, colour = "grey30")  + 
+     geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", 
+       fontface = "bold", label = row.names(en_coord_cont))  
+```
+
+NOus pouvons inspecter les résultat de la fonction envfit qui a été utilisées pour projeter les vecteurs environnementaux dans le plan de la NMDS : 
+
+```{r}
+en
+```
+
+Le résultat de la fonction indique que la température moyenne influence significativement la composition d'au moins une communauté. Graphiquement, il semblerait qu'elle soit positivement corrélée aux communautés 5 à 8. 4
+
+Il semblerait que le changement dans la commuauté soit dû à un changement progressif, que l'on pourrait supposer être le changement climatique plutôt qu'un effet de la sécheresse. Si de changement était dû à la sécheresse malgré tout, il serait probablement dû à l'accumlation des effets des sécheresses successives, dure à évaluer. 
+
+### Partition de variance et significativité avec une CCA 
+
+La CCA (avec permutations) est utilisée dans cette partie pour tester la significativités des liens entre indicateurs environnementaux et composition de la communauté. Certains auteurs décrivent la CCA comme une "mauvaise représentation" en particulier pour le composition de communuatés (?). Toutefois la RDA, plus classiquement utilisée, doit reposer sur une hypothèse de normalité.  
+
+```{r}
+# partition de variance avec les indicateurs de sécheresse et de qualité chimique de l'eau 
+
+varpart_poiss<-varpart(com_poiss, indic_sech_poiss, indic_quali_poiss)
+varpart_poiss
+```
+
+```{r}
+plot(varpart_poiss)
+```
+
+On constate que la partition de variance montre un certain nombre de parts de variance expliquée négatives (aucune idée de pourquoi), qui ne sont donc pas affichées sur le graphique ci-dessus. De façon globale, les indicateurs environnementaux ne semblent expliquer qu'extrêmement peu de la variance de la matrice de composition des communautés. 
+
+On peut toutefois tester le significativité des relations avec une CCA et un test de permutation : 
+
+```{r}
+cca_poiss<-cca(com_poiss~.,indic_sech_poiss)
+permutest(cca_poiss, permutations=999)
+```
+
+Le test ne renvoie rien de significatif. Il n'y a pas d'effet significatif des indicateurs de sécheresse sur la composition des communautés pour les plages 1 à 9. 
+
+```{r}
+cca_poiss<-cca(com_poiss~.,indic_quali_poiss)
+permutest(cca_poiss, permutations=999)
+```
+
+De même, il n'y a pas d'effet significatif de la concentration en o2 dissout sur la composition des communautés pour les plages 1 à 9. 
+
+```{r}
+cca_poiss<-cca(com_poiss[2:8,]~.,Tindic_sech_poiss)
+permutest(cca_poiss, permutations=999)
+```
+
+Le même constat est fait pour les indicateurs de sécheresse pour les plages 2 à 8 disposant des températures. 
+
+```{r}
+cca_poiss<-cca(com_poiss[2:8,]~.,Tindic_quali_poiss)
+permutest(cca_poiss, permutations=999)
+```
+Le même constat est fait pour les indicateurs de qualité de l'eau (dont la température), toutefois la p-value est beaucoup plus faible (p-value=0,078). Pour une intervalle de confiance à 90%, cette p-valeur est significative. Ce qui veut dire qu'il est possible d'affirmer avec une probabilité de 10% de se tromper que Tmoy a un effet significatif sur la composition de la communauté. 
+
+### Intégration d'indicateurs macro-invertébrés 
+
+On peut supposer que les indicateurs macro-invertébrés peuvent avoir une inflence sur les communuatés de poissons, étant donné que de nombreux poissons (dont les Chabot ou les Loche Franche) sont invertivores (régime essentielmement constitué de Chironomes pour le Chabot et la Loche Franche). Si une sécheresse a un impact sur les communuatés d'invertébrés, on peut supposer que par effet cascade, les poissons seront impactés également. De plus, une différence majeure entre les Chabot/Loche Franche et le Vairon (espèces influencant le plus le remaniement de la communauté comme montré-ci dessus) est que le Vairon est omnivore et opportuniste. 
+
+```{r}
+#data frame du nombre de chironomes par plage 
+
+nb_chiro<-taxons_stmarie %>% 
+  filter(libelle_appel_taxon=="Chironomidae") %>% 
+  ungroup() %>% 
+  select(date,plage_minv, nb_chiro=resultat_taxon)
+
+# ajout de l'i2m2 (état globale du peuplement minv)
+
+df<-i2m2_stmarie %>% 
+  filter(lib_par=="Ind Invert Multimetrique") %>% 
+  select(i2m2=resultat)
+
+indic_minv_poiss<-cbind(nb_chiro, df)
+
+```
+
+Le premier problème a résoudre est de savoir comment faire l'association entre indicateurs poisson et macro-invertébré, autrement dit comment lier les plages d'études poisson et macro-invertébré. En fonction des dates de relevés macro-invertébrés, ils seront situés au sein des plages poissons. Dans le cas où plusieurs indicateurs minv seront disponibles par plage poisson, une moyenne de l'indicateur sera faite. 
+
+```{r}
+#liaison avec les plages poisson 
+
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2006-10-08") & indic_minv_poiss$date <=as.Date("2008-10-08") ,"plage"] <- "1"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2008-10-09") & indic_minv_poiss$date <=as.Date("2010-08-26") ,"plage"] <- "2"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2010-08-27") & indic_minv_poiss$date <=as.Date("2012-09-13") ,"plage"] <- "3"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2012-09-14") & indic_minv_poiss$date <=as.Date("2013-10-02") ,"plage"] <- "4"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2013-10-03") & indic_minv_poiss$date <=as.Date("2014-10-08") ,"plage"] <- "5"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2014-10-09") & indic_minv_poiss$date <=as.Date("2016-09-14") ,"plage"] <- "6"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2016-09-15") & indic_minv_poiss$date <=as.Date("2018-10-08") ,"plage"] <- "7"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2018-10-09") & indic_minv_poiss$date <=as.Date("2020-10-20") ,"plage"] <- "8"
+indic_minv_poiss[indic_minv_poiss$date >=as.Date("2020-10-21") & indic_minv_poiss$date <=as.Date("2022-10-06") ,"plage"] <- "9"
+
+indic_minv_poiss$plage<-as.factor(indic_minv_poiss$plage)
+ 
+indic_minv_poiss$plage<-ordered(indic_minv_poiss$plage, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9"))
+
+```
+
+La correspondance donne : 
+
+```{r}
+indic_minv_poiss
+```
+
+Les plages 2 à 9 peuvent être associées avec un indicateur macro-invertébré. 
+
+```{r}
+#moyenne des indicateurs minv par plage poisson 
+
+indic_minv_poiss<-indic_minv_poiss %>% 
+  dplyr::group_by(plage) %>% 
+  dplyr::summarise(mean_i2m2=mean(i2m2), mean_chiro=mean(nb_chiro)) %>% 
+  ungroup() %>% 
+  select(mean_i2m2, mean_chiro)
+
+row.names(indic_minv_poiss)<-c(2:9)
+indic_minv_poiss
+```
+
+```{r}
+Tindic_envir_poissM<-cbind(Tindic_envir_poiss, indic_minv_poiss[2:8,])
+```
+
+Vérifions si ces deux indicateurs sont corrélés :
+```{r}
+cor.test(indic_minv_poiss$mean_i2m2, indic_minv_poiss$mean_chiro, method="spearman")
+```
+
+Ces deux indicateurs ne sont pas significativment corrélés, donc les deux seront conservés. 
+
+```{r}
+#plot des vecteurs environnementaux + minv pour les plages 2 à 8 
+
+
+en = envfit(NMDS_poiss2, Tindic_envir_poissM, permutations = 999, na.rm = TRUE)
+en_coord_cont = as.data.frame(scores(en, "vectors"))
+
+ ggplot(data = data.scores2, aes(x = NMDS1, y = NMDS2, color=plage)) + 
+     geom_point(data = data.scores2, size = 3) +
+   geom_text(aes(label=plage),nudge_x = 0, nudge_y = 0.05, color="black", size=3)+
+     scale_colour_manual(values = c("1" = '#e6194b', "2"='#3cb44b', 
+                               "3"= '#ffe119', "4"= '#4363d8', "5"= '#f58231', "6"= '#911eb4', 
+                               "7" ='#46f0f0', "8"='#f032e6', "9"='#bcf60c'))  + 
+     geom_segment(aes(x = 0, y = 0, xend = NMDS1, yend = NMDS2), 
+       data = en_coord_cont, size =1, colour = "grey30")  + 
+     geom_text(data = en_coord_cont, aes(x = NMDS1, y = NMDS2), colour = "grey30", 
+       fontface = "bold", label = row.names(en_coord_cont))  
+     
+```
+
+```{r}
+en
+```
+Les indicateurs macro-invertébrés ne sont pas significatifs sur le résumé de la fonction envfit. 
+Faisons une partition de variance :
+
+```{r}
+var_minv_poiss<-varpart(com_poiss[2:8,], Tindic_sech_poiss, Tindic_quali_poiss, indic_minv_poiss[2:8,])
+var_minv_poiss
+```
+
+```{r}
+plot(var_minv_poiss, cutoff=0, digits=3)
+```
+
+Le diagramme de Venne est vide alors qu'il ne devrait pas...
+
+```{r}
+cca_poiss<-cca(com_poiss[2:8,]~.,indic_minv_poiss[2:8,])
+permutest(cca_poiss, permutations=999)
+```
+
+Pas du tout de significativité des indic macro-invertébrés. 
+
+## Co-inertie entre tableaux de paramètres environnementaux et indicateurs poissons (IPR et métriques)
+
+Le but de cette partie est de tester la co-inertie entre les tableaux des indicateurs environnementaux et piscicoles. Autrement dit, d'évaluer la co-structure de deux matrices ou plus. C'est une méthode moins appréciée par les écologistes par rapport aux classiques RDA ou CCA, mais elle a l'avantaghe d'être très flexible. 
+
+```{r}
+#Co-inertie pour les tableaux des plages 1 à 9
+
+#conversion des tableau d'indicateurs en format dudi (avec une ACP)
+dudi_met_poiss<-dudi.pca(indic_met_poiss)
+dudi_met_env<-dudi.pca(indic_envir_poiss)
+
+#coinertie
+coipoiss <- coinertia(dudi_met_poiss,dudi_com_env)
+coipoiss
+
+#significativité par permutations 
+randtest(coipoiss)
+```
+
+Il n'y a pas de strucure commune significative entre les deux tableaux (p-value = 0,709). 
+
+```{r}
+plot(coipoiss)
+```
+
+```{r}
+#Co-inertie pour les tableaux des plages 2 à 8
+
+#conversion des tableau d'indicateurs en format dudi (avec une ACP)
+Tdudi_met_poiss<-dudi.pca(indic_met_poiss[2:8,])
+Tdudi_met_env<-dudi.pca(Tindic_envir_poiss)
+
+#coinertie
+Tcoipoiss <- coinertia(Tdudi_met_poiss,Tdudi_met_env)
+Tcoipoiss
+
+#significativité par permutations 
+randtest(Tcoipoiss)
+```
+
+Il n'ya aucune structure commune significative. 
+
+```{r}
+plot(Tcoipoiss)
+```
+
+## Effet de la sécheresse sur la taille des individus 
+
+Le but de cette partie est de voir s'il existe un lien entre paramètres environnementaux et taille des individus. L'idéal serait de pouvoir construire un modèle linéaire mixte, si les hypothèses de validité sont vérifiées. Sinon, il sera aussi possible de suivre la taille de quelques espèces pertinament choisies (présence à toutes les pêches ou presque, poisson d'eau chaude ou froide). Les modèles linéaires necessitent de construire des facteurs à plusieurs modalités. On pourrait construire un facteur duree à trois modalité : "nulle", "courte", "longue" et un facteur severite à trois modalité "nulle", "faible", "forte".  
+
+### Essai de GLM 
+
+```{r}
+#construction des modalités de durée et de sévérité 
+
+sech_glm<-plage_carac %>% 
+  select(plage, sum_duration, sum_deficit)
+  
+sech_glm[sech_glm$sum_duration==0 ,"duration_class"] <- "nulle"
+sech_glm[sech_glm$sum_duration>0 & sech_glm$sum_duration<=30,"duration_class"] <- "courte"
+sech_glm[sech_glm$sum_duration>30 ,"duration_class"] <- "longue"
+
+sech_glm[sech_glm$sum_deficit==0 ,"deficit_class"] <- "nulle"
+sech_glm[sech_glm$sum_deficit>0 & sech_glm$sum_deficit<=500,"deficit_class"] <- "faible"
+sech_glm[sech_glm$sum_deficit>500 ,"deficit_class"] <- "forte"
+
+sech_glm
+
+```
+
+```{r}
+#on joint le tableau d'indicateurs de secheresse au tableau de mesures individuelles par les plages 
+
+df_glm<-merge(mei_marie, sech_glm, by="plage")
+```
+
+```{r}
+hist(df_glm$sum_duration)
+hist(log(df_glm$sum_duration))
+hist(sqrt(df_glm$sum_duration))
+hist(1/(df_glm$sum_duration))
+hist((df_glm$mei_taille)^2)
+```
+Acune transformation ne permet d'avoir une distribution à peu près normale pour les indicateurs de sécheresse. 
+
+```{r}
+hist(df_glm$mei_taille)
+hist(log(df_glm$mei_taille)) #meilleure transformation 
+hist(sqrt(df_glm$mei_taille))
+hist(1/(df_glm$mei_taille))
+
+```
+
+La transformation en log de 10 permet d'avoir une distribution correcte. 
+
+Le premier modèle mixte testé est du type :
+
+```{r}
+#écriture du modèle sans transformation (dans un premier temps pour voir ce que ça donne)
+
+mod1<-lmer(data=df_glm, mei_taille~sum_duration+sum_deficit+(1|esp_code_alternatif))
+summary(mod1)
+```
+
+La médiane du résumé du modèle est proche de 0, et 1Q et 3Q sont proches, ce qui supposerait une distribution des résidus plutot normale. 
+
+```{r}
+E1 <- resid(mod1)
+F1 <- fitted(mod1)
+plot(x = F1, 
+     y = E1, 
+     xlab = "Fitted Values",
+     ylab = "Normalized residuals")
+abline(h = 0, lty = 2)
+```
+
+Les points ci-dessus ne semblent pas très bien répartis de part et d'autre de la droite y=0. 
+
+```{r}
+    # B. Vérifiez l’indépendance :
+    # i. graphique des résidus VS chaque covariable du modèle 
+    # Longueur corporelle des poissons
+    plot(x = df_glm$sum_duration, 
+         y = E1, 
+         xlab = "sum_duration",
+         ylab = "Normalized residuals")
+    abline(h = 0, lty = 2)
+    # Note: Les regroupements de données sont dus à la structure des données, où des poissons de seulement 5 
+    # classes de taille  (grandes, petites, et trois groupes entre les deux) étaient capturés.
+    
+    plot(x = df_glm$sum_deficit, 
+         y = E1, 
+         xlab = "sum_deficit",
+         ylab = "Normalized residuals")
+    abline(h = 0, lty = 2)
+    
+     
+    # Espèce
+    boxplot(E1 ~df_glm$esp_code_alternatif ,   
+            ylab = "Normalized residuals",
+            data = df_glm, xlab = "Espèces")
+    abline(h = 0, lty = 2)
+
+
+```
+
+Les résidus normalisés semblent pour les trois graphiques répartis de part et d'autre de la droite y=0, ce qui semble indiqué que l'hypothèse d'indépendance est vérifiée.Cependant, pour une espèce, la médiane se situe loin de y=0 (aucune idée de si ça remet en cause l'indépendance). 
+
+Vérifions la normalité des résidus : 
+
+```{r}
+hist(E1, breaks=50)
+```
+
+Les résidus semblent moyennement normalement distribués. 
+
+POur résumé, il semblerait qu'il soit difficile de valider ou pas les hypothèses de ce modèle. 
+
+Essayons de voir si la transformation des tailles avec le log de 10 permet de valider les hypothèses de validité plus clairement : 
+
+```{r}
+mod2<-lmer(data=df_glm, log(mei_taille)~sum_duration+sum_deficit+(1|esp_code_alternatif))
+summary(mod2)
+```
+
+```{r}
+E2 <- resid(mod2)
+F2 <- fitted(mod2)
+plot(x = F2, 
+     y = E2, 
+     xlab = "Fitted Values",
+     ylab = "Normalized residuals")
+abline(h = 0, lty = 2)
+```
+
+Les points semblent bien mieux répartis autour de y=0, de façon plus homogène. 
+
+```{r}
+    # B. Vérifiez l’indépendance :
+    # i. graphique des résidus VS chaque covariable du modèle 
+    # Longueur corporelle des poissons
+    plot(x = df_glm$sum_duration, 
+         y = E2, 
+         xlab = "sum_duration",
+         ylab = "Normalized residuals")
+    abline(h = 0, lty = 2)
+    # Note: Les regroupements de données sont dus à la structure des données, où des poissons de seulement 5 
+    # classes de taille  (grandes, petites, et trois groupes entre les deux) étaient capturés.
+    
+    plot(x = df_glm$sum_deficit, 
+         y = E2, 
+         xlab = "sum_deficit",
+         ylab = "Normalized residuals")
+    abline(h = 0, lty = 2)
+    
+     
+    # Espèce
+    boxplot(E2 ~df_glm$esp_code_alternatif ,   
+            ylab = "Normalized residuals",
+            data = df_glm, xlab = "Espèces")
+    abline(h = 0, lty = 2)
+
+
+```
+
+Les deux premiers graphique ci-dessous valident l'hypothèse d'indépendance, mais le graphique en boxplot est moins satisfaisant pour ce modèle que pour le modèle précédant sans transformation. 
+
+Vérifions la normalité des résidus : 
+
+```{r}
+hist(E2, breaks=50)
+```
+
+Les résidus ont l'air normalement distribués. 
+
+En résumé, il semble possible de valider ce modèle. 
+(par contre aucune idée de comment interpréter tout ça, et de comment savoir si quelque chose de significatif)
+
+```{r}
+mod3<-lmer(data=df_glm, log(mei_taille)~duration_class+deficit_class+(1|esp_code_alternatif))
+summary(mod3)
+```
+
+```{r}
+anova(mod3)
+```
+
+### Essai de lm sur la taille d'une espèce 
+
+#### Chabot
+
+La première espèce dont on veut étudier l'évolution de la taille est le Chabot, qui est l'espèce la plus présente sur la station (et la seule présente à toutes les plages). Certaines tailles entrée dans ASPE sont abérrantes : pour palier à ça, toutes les tailles de Chabot suppérieures à 200 mm sont supprimées. 
+
+```{r}
+#data frame pour la taille des chabots 
+
+mei_cha<-df_glm %>% 
+  filter(esp_code_alternatif=="CHA" & mei_taille<200)
+```
+
+```{r}
+lm1<-lm(mei_taille~duration_class*deficit_class, data=mei_cha)
+```
+
+```{r}
+plot(lm1)
+```
+
+On constate que les hypothèse de validité ne sont respectées, même après transformation (log, sqrt, 1/x, log(x)^2, ^2, ^(1/3)). La distribution des résidus du modèle (sans transformation) semble bi-modale : 
+
+```{r}
+ggplot(aes(x=mei_taille), data=mei_cha)
++ geom_bar()
+```
+
+```{r}
+bptest(lm1)
+```
+
+Le test de Breush-Pagan ci-dessus montre que les résidus du modèle ne respectent pas du tout l'hypothèse d'homoscédasticité, même après transformation. La transformation qui permet le plus d'approcher l'homoscédasticité est la mise au carré. Mais elle ne permet quand même pas de valider l'hypothèse (p-value= 0,02926). 
+
+```{r}
+aovp(mei_taille~duration_class*deficit_class,perm="Prob", data=mei_cha)
+```
+
+```{r}
+summary(aovp(mei_taille~duration_class*deficit_class,perm="Prob", data=mei_cha))
+```
+
+Il semblerait que la classe de durée de la sécheresse ait un effet très significatif sur la taille des Chabots. L'intéraction durée et sévérité de la sécheresse est significative, ce qui semble logique étant donné qu'à une valeur de durée est toujours associée la même valeur de déficit. 
+Toutefois, il semblerait qu'une grande partie de la donnée n'ai pas pu être intégrée dans le test...
+
+```{r}
+boxplot(mei_taille~duration_class, data=mei_cha)
+```
+
+```{r}
+summary(anova(lmp(mei_taille~duration_class*deficit_class, data=mei_cha)))
+```
+
+Les constats sont les mêmes avec l'utilisation de la fonction anova à partir d'un lmp (modèle linéaire avec permutations). 
+
+```{r}
+comparison<-with(mei_cha ,kruskal(mei_taille,duration_class, group=TRUE, p.adj = "bon"))
+comparison
+```
+
+On constate que la taille des Chabots des plages avec une sécheresse courte est significativement plus élevée que celle des Chabots des plages sans sécheresse ou avec une sécheresse longue. Avec un effet significatif de la durée de sécheresse sur les Chabots, on attendait logiquement une taille plus petite pour les sécheresses longues (voire courtes) par rapport aux plages sans sécheresses, ce qui n'est pas le cas. Les résultats du test ne permettent donc pas vraiment de tirer un effet logique de la sécheresse sur les Chabots. 
+
+```{r}
+boxplot(mei_taille~deficit_class, data=mei_cha)
+```
+
+#### Vairon 
+
+Attention : comme aucun Vairon n'a été pêché pour la plage 1, uniquement 8 plages sont étudiées dans le modèle crée ci-après.
+
+```{r}
+#data frame pour la taille des chabots 
+
+mei_vai<-df_glm %>% 
+  filter(esp_code_alternatif=="VAI" & mei_taille<200)
+```
+
+```{r}
+lm2<-lm(mei_taille~duration_class*deficit_class, data=mei_vai)
+```
+
+```{r}
+plot(lm2)
+```
+
+
+```{r}
+shapiro.test(residuals(lm2))
+```
+
+Le QQPlot, qui vérifie la normalité des résidus du modèle, semble plutot correcte, mais le test de normalité de Shapiro Wilk rejette l'hypothèse de normalité ...
+
+```{r}
+aovp(mei_taille~duration_class*deficit_class,perm="Prob", data=mei_vai)
+```
+
+```{r}
+summary(aovp(mei_taille~duration_class*deficit_class,perm="Prob", data=mei_vai))
+```
+
+On retrouve le même problème de 4 effets sur 9 non estimables que pour les Chabots. Ici, la classe de durée et de déficit a un effet significatif sur la taille de vairon. En revanche, l'intéraction n'est pas significative. 
+
+```{r}
+comparison<-with(mei_vai ,kruskal(mei_taille,duration_class, group=TRUE, p.adj = "bon"))
+comparison
+```
+
+Encore une fois, les groupes statistiques ne sont pas tels qu'attendus : la taille des Vairons pour une longue sécheresse est significativement plus élevée que pour une sécheresse courte, mais pas significativement différente d'une plage sans sécheresse. On attendait une taille plus faible pour une sécheresse longue par rapport à une sécheresse courte ou pas de sécheresse. 
+
+```{r}
+comparison<-with(mei_vai ,kruskal(mei_taille,deficit_class, group=TRUE, p.adj = "bon"))
+comparison
+```
+
+Pour la sévérité de la sécheresse, les résultats sont de même inatendus et semblent incohérents : la taille des Vairons pour une sécheresse sévère est significativement plus élevée que pour une sécheresse courte et nulle, et il en va de même pour une sécheresse nulle par rapport à une sécheresse courte. On attendait, si un effet significatif devait être mis en évidence), un gradient d'effet de sécheresse nulle à forte (ou inversement). 
+
+```{r}
+boxplot(mei_taille~duration_class, data=mei_vai)
+```
+
+```{r}
+boxplot(mei_taille~deficit_class, data=mei_vai)
+```
+
+On constate que la dispertion des données pour les classes courte et faible des deux facteurs testés est très élevée. Ceci peut probablement expliquer les résultats inatendus des tests statistique, qui seraient dû à un biais dans la donnée. 
+
+Un biais non négligeable dans l'acquisition de la donnée est le fait que le design n'est pas du tout equilibré. Le nombre de répétition par classe de facteur est très dépendant du nombre d'individus pêchés par opération, qui ne peut pas être contrôlé. 
+
+
+
+

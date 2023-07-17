@@ -1,0 +1,199 @@
+---
+title: "Effet de la sécheresse sur les macro-invertébrés de la Sainte-Marie à Glaignes"
+author: "Imane PALAGI"
+date: "2023-07-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Cette deuxième partie de l'étude de la sécheresse hydrologique sur les macro-invertébrés de la station SANDRE de la Sainte-Marie à Glaignes a pour but de mettre en relation les indicateurs environnementaux et de biodiversité. Les indicateurs environnementaux ont été calculés dans le script RMarkdown "Param_envir_stmarie_minv" consultable dans le projet R "sainte_marie", dans le dossier "scripts". 
+
+```{r}
+# Chargement des packages necessaires
+
+library(tidyverse) 
+library(hubeau) #package pour les données de débits 
+library(ggpubr) # package pour la réalisation de certains graphiques 
+library(hydroTSM) #package traitement/analyse de séries temporelles liées à l'hydrologie 
+library(runner) # pour le calcule de moyennes glissantes 
+library(lfstat) #pour l'identification/regroupement d'évènements de sécheresse 
+library(Hmisc) #pour le calculde de matrices de corrélation avec p-values 
+library(corrplot) #pour la visualisation de matrices de corrélations 
+library(FactoMineR) # pour ACP par exemple 
+library(vegan) #pour tests sur données écologiques 
+library(ade4) #stats sur données écologiques 
+library(lme4) #GLM
+library(lmtest)
+library(lmPerm)
+```
+
+# Construction des data frame des indicateurs macro-invertébrés 
+
+Cette partie a pour but de construir des tableaux de données qui recensent pour chaque plage d'étude (définies dans les Rmarkdown "Param_environnement_stmarie_minv") les indicateurs macro-invertébrés associés. Pour rappel, la date de l'indicateur correspond toujours au dernier jour de la plage qui lui est associée. 
+
+## I2M2 et ses métriques 
+
+```{r}
+load(file="raw_data/i2m2_stmarie.RData")
+```
+
+```{r}
+# création de la colonne de plage 
+
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2009-06-03") & i2m2_stmarie$DATE <=as.Date("2010-06-03") ,"plage_minv"] <- "1"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2010-06-04") & i2m2_stmarie$DATE <=as.Date("2011-07-25") ,"plage_minv"] <- "2"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2011-07-26") & i2m2_stmarie$DATE <=as.Date("2012-05-29") ,"plage_minv"] <- "3"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2012-05-30") & i2m2_stmarie$DATE <=as.Date("2013-08-28") ,"plage_minv"] <- "4"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2013-08-29") & i2m2_stmarie$DATE <=as.Date("2014-07-22") ,"plage_minv"] <- "5"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2014-07-23") & i2m2_stmarie$DATE <=as.Date("2015-10-05") ,"plage_minv"] <- "6"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2015-10-06") & i2m2_stmarie$DATE <=as.Date("2016-08-06") ,"plage_minv"] <- "7"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2016-08-07") & i2m2_stmarie$DATE <=as.Date("2018-07-17") ,"plage_minv"] <- "8"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2018-07-18") & i2m2_stmarie$DATE <=as.Date("2019-06-13") ,"plage_minv"] <- "9"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2019-06-14") & i2m2_stmarie$DATE <=as.Date("2020-09-23") ,"plage_minv"] <- "10"
+i2m2_stmarie[i2m2_stmarie$DATE >=as.Date("2020-09-24") & i2m2_stmarie$DATE <=as.Date("2021-08-18") ,"plage_minv"] <- "11"
+
+i2m2_stmarie$plage_minv<-as.factor(i2m2_stmarie$plage_minv)
+ 
+i2m2_stmarie$plage_minv<-ordered(i2m2_stmarie$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+```
+
+```{r}
+i2m2_stmarie<-i2m2_stmarie %>% 
+  select(date=DATE, code_par=CODE_PAR, lib_par=LIB_PAR, resultat=RESULTAT, plage_minv)
+```
+
+Le data frame construit ressemble à : 
+
+```{r}
+head(i2m2_stmarie, 10)
+```
+
+## Listes faunistiques (taxons)
+
+```{r}
+load(file="raw_data/taxons_hdf_phase_homo.RData")
+```
+
+```{r}
+#filtrage de données de la sainte-marie 
+
+taxons_stmarie<-taxons_macro_hdf2 %>% 
+  filter(code_station_hydrobio=="03134730") %>% 
+  select(date=date_prelevement, code_appel_taxon:code_phase) %>% 
+  mutate(date=ymd(date))
+
+taxons_stmarie$code_appel_taxon<-as.factor(taxons_stmarie$code_appel_taxon)
+taxons_stmarie$libelle_appel_taxon<-as.factor(taxons_stmarie$libelle_appel_taxon) 
+  
+```
+
+```{r}
+#somme des résultat des phases A, B et C 
+
+taxons_stmarie<-taxons_stmarie %>% 
+  dplyr::group_by(date, code_appel_taxon, libelle_appel_taxon) %>% 
+  dplyr::summarise(resultat_taxon=sum(resultat_taxon))
+```
+
+```{r, eval=FALSE}
+save(taxons_stmarie, file="raw_data/taxons_stmarie.RData")
+```
+
+```{r}
+#création de la colonne de plage 
+
+taxons_stmarie[taxons_stmarie$date >=as.Date("2009-06-03") & taxons_stmarie$date <=as.Date("2010-06-03") ,"plage_minv"] <- "1"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2010-06-04") & taxons_stmarie$date <=as.Date("2011-07-25") ,"plage_minv"] <- "2"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2011-07-26") & taxons_stmarie$date <=as.Date("2012-05-29") ,"plage_minv"] <- "3"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2012-05-30") & taxons_stmarie$date <=as.Date("2013-08-28") ,"plage_minv"] <- "4"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2013-08-29") & taxons_stmarie$date <=as.Date("2014-07-22") ,"plage_minv"] <- "5"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2014-07-23") & taxons_stmarie$date <=as.Date("2015-10-05") ,"plage_minv"] <- "6"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2015-10-06") & taxons_stmarie$date <=as.Date("2016-08-06") ,"plage_minv"] <- "7"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2016-08-07") & taxons_stmarie$date <=as.Date("2018-07-17") ,"plage_minv"] <- "8"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2018-07-18") & taxons_stmarie$date <=as.Date("2019-06-13") ,"plage_minv"] <- "9"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2019-06-14") & taxons_stmarie$date <=as.Date("2020-09-23") ,"plage_minv"] <- "10"
+taxons_stmarie[taxons_stmarie$date >=as.Date("2020-09-24") & taxons_stmarie$date <=as.Date("2021-08-18") ,"plage_minv"] <- "11"
+
+taxons_stmarie$plage_minv<-as.factor(taxons_stmarie$plage_minv)
+ 
+taxons_stmarie$plage_minv<-ordered(taxons_stmarie$plage_minv, levels=c("1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"))
+```
+
+Le data frame de liste faunistique ressemble à : 
+
+```{r}
+head(taxons_stmarie, 10)
+```
+
+# Influence de la sécheresse sur les macro-invertébrés
+
+Le but de cette partie est de mettre en relation les indicateurs environnementaux et piscicoles pour les 9 plages d'étude, afin de déterminer s'il est possible de mettre en évidence un effet de la sécheresse sur les poissons. 
+
+## Selection des indicateurs environnementaux 
+
+La première étape de l'analyse est de déterminer grâce à une matrice de corrélation si certains indicateurs environnementaux sont corrélés (principe de parcimonie + éviter l'autocorrélation dans les éventuels modèles).
+Contrairement aux données pisicoles, chacune des plages d'étude macro-invertébrée dispose de données de température. Il n'est donc pas necessaire de séparer les analyses en deux (avec et sans température). 
+
+```{r}
+#chargement du data frame d'indicateurs de température et d'o2
+load(file="processed_data/indic_temp_minv.RData")
+load(file="processed_data/o2_minv.RData")
+```
+
+```{r}
+#chargement du data frame d'indicateurs de sécheresse et 
+load(file="processed_data/minv_plage_carac.RData")
+```
+
+```{r}
+cor_mx<-cor(x=data.frame(sum_intensity=minv_plage_carac$sum_intensity, 
+                         sum_deficit=minv_plage_carac$sum_deficit, 
+                         sum_duration=minv_plage_carac$sum_duration,
+                         nb_event=minv_plage_carac$nb_event,
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr,
+                        mean_o2=o2_minv_plage$mean_o2),
+            method="spearman")
+
+cor_mx2<-rcorr(x=as.matrix(data.frame(sum_intensity=minv_plage_carac$sum_intensity, 
+                         sum_deficit=minv_plage_carac$sum_deficit, 
+                         sum_duration=minv_plage_carac$sum_duration,
+                         nb_event=minv_plage_carac$nb_event,
+                         Tmoy=T_carac_plage$Tmoy, 
+                         Tmax=T_carac_plage$Tmax, 
+                         Tmax_7jr=T_carac_plage$Tmax_7jr,
+                        mean_o2=o2_minv_plage$mean_o2)), type="spearman")
+diag(cor_mx2$P) <- 0
+```
+
+```{r}
+#représentation graphique de la corrélation de spearman 
+
+par(mfrow=c(1,2))
+
+corrplot(cor_mx, type="upper", order="hclust", tl.col="black", tl.srt=90)
+corrplot(cor_mx2$r, type="upper", order="hclust", 
+         p.mat = cor_mx2$P, sig.level = 0.05, insig = "blank")
+
+
+```
+
+On constate que tous les indicateurs de sécheresse sont significativement corrélés : on ne gardera donc qu'un seul indicateur, qui sera l'intensité (car elle prend en compte à la fois la durée et la sévérité). On aurait aussi pu construire un ou plusieurs nouveaux indicateurs de sécheresse non-corrélés à partir d'une ACP, mais l'interprétation aurait été moins directe. De plus, il aurait servit à synthétiser uniquement trois indicateurs donc deux sont synthétisés via l'intensité, ce qui aurait eu moins d'interet qu'avec un plus grand nombre d'indicateurs. 
+T max est significativement corrélé à Tmax7jr et Tmoy. On gardera donc uniquement Tmax7jr, moins sensible aux erreurs de mesure que Tmax, et T moy.  
+
+Pour récapituler, les indicateurs environnementaux conservés sont : 
+
+-L'intensité totale de la sécheresse pour une plage\ 
+-La température moyenne par plage\
+-La température maximum moyenne sur 7 jours consécutifs sur une plage\
+-La concentration moyenne par plage en O2 dissout
+
+
+
+
+
